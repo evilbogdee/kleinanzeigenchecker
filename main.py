@@ -9,21 +9,24 @@ import chardet
 from bs4 import BeautifulSoup
 from colorama import Fore, Style, init
 from curl_cffi import requests
+from fake_useragent import UserAgent
 from ftfy import fix_text
 
-from config import PROXY_FILE_PATH, COOKIES_FILE_PATH, PROFILE_URL
+from config import COOKIES_FILE_PATH, PROFILE_URL, PROXY_FILE_PATH
 
 init(autoreset=True)
 
-warnings.filterwarnings("ignore", message="`secure` changed to True for `__Secure-` prefixed cookies")
+warnings.filterwarnings(
+    "ignore", message="`secure` changed to True for `__Secure-` prefixed cookies"
+)
 
-SOCKS5_REGEX = re.compile(r'^socks5://.+')
+SOCKS5_REGEX = re.compile(r"^socks5://.+")
 
 
 def convert_proxies(file_path):
     updated_proxies = []
 
-    with open(file_path, 'r') as infile:
+    with open(file_path, "r") as infile:
         for line in infile:
             line = line.strip()
             if not line:
@@ -33,7 +36,7 @@ def convert_proxies(file_path):
                 updated_proxies.append(line)
                 continue
 
-            parts = line.split(':')
+            parts = line.split(":")
             if len(parts) == 4:
                 host = parts[0]
                 port = parts[1]
@@ -45,14 +48,14 @@ def convert_proxies(file_path):
                 print(f"Неверный формат строки: {line}")
                 updated_proxies.append(line)
 
-    with open(file_path, 'w') as outfile:
+    with open(file_path, "w") as outfile:
         for proxy in updated_proxies:
-            outfile.write(proxy + '\n')
+            outfile.write(proxy + "\n")
 
 
 def load_proxies(file_path):
     proxies = []
-    with open(file_path, 'r') as file:
+    with open(file_path, "r") as file:
         for line in file:
             proxies.append(line.strip())
     return proxies
@@ -65,20 +68,24 @@ def clean_cookies_file(file_path):
     try:
         allowed_domain = "www.kleinanzeigen.de"
 
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, "rb") as file:
+            raw_data = file.read()
+            encoding = chardet.detect(raw_data)["encoding"]
+
+        with open(file_path, "r", encoding=encoding) as file:
             data = file.readlines()
 
         filtered_lines = []
         for line in data:
-            cleaned_line = line.lstrip('\ufeff').strip()
+            cleaned_line = line.lstrip("\ufeff").strip()
             if cleaned_line.startswith(allowed_domain):
                 filtered_lines.append(line)
-            elif 'CSRF-TOKEN' in line:
+            elif "CSRF-TOKEN" in line:
                 filtered_lines.append(line)
 
         result = "".join(filtered_lines)
 
-        with open(file_path, 'w', encoding='utf-8') as file:
+        with open(file_path, "w", encoding="utf-8") as file:
             file.write(result)
 
     except Exception as e:
@@ -88,14 +95,14 @@ def clean_cookies_file(file_path):
 def clean_cookies_in_directory(directory_path):
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
-        if filename.endswith('.txt') and os.path.isfile(file_path):
+        if filename.endswith(".txt") and os.path.isfile(file_path):
             clean_cookies_file(file_path)
 
 
 def load_all_cookies(directory_path):
     all_cookies = []
     for filename in os.listdir(directory_path):
-        if filename.endswith('.txt'):
+        if filename.endswith(".txt"):
             file_path = os.path.join(directory_path, filename)
             cookies = load_cookies(file_path)
             all_cookies.append((cookies, file_path))
@@ -106,31 +113,30 @@ def load_cookies(file_path):
     cookies_dict = {}
 
     try:
-        with open(file_path, 'rb') as file:
+        with open(file_path, "rb") as file:
             raw_data = file.read()
-            encoding = chardet.detect(raw_data)['encoding']
-            if encoding == 'MacRoman':
-                encoding = 'mac_roman'
+            encoding = chardet.detect(raw_data)["encoding"]
+            if encoding == "MacRoman":
+                encoding = "mac_roman"
 
-        with open(file_path, 'r', encoding=encoding) as file:
+        with open(file_path, "r", encoding=encoding) as file:
             for line in file:
-                parts = line.strip().split('\t')
+                parts = line.strip().split("\t")
                 if len(parts) > 6:
-                    name = parts[5] if len(parts) > 5 else ''
-                    value = parts[6] if len(parts) > 6 else ''
+                    name = parts[5] if len(parts) > 5 else ""
+                    value = parts[6] if len(parts) > 6 else ""
 
                     name = fix_text(name)
                     value = fix_text(value)
 
-                    if encoding == 'mac_roman':
-                        name = name.encode('mac_roman').decode('latin-1')
-                        value = value.encode('mac_roman').decode('latin-1')
+                    if encoding == "mac_roman":
+                        name = name.encode("mac_roman").decode("latin-1")
+                        value = value.encode("mac_roman").decode("latin-1")
 
-                    # другой вариант очистки куки от невалидных символов (удалить/закомментировать такой же выше)
-                    # name = fix_text(name)
-                    # value = fix_text(value)
+                    name = fix_text(name)
+                    value = fix_text(value)
 
-                    clean_value = re.sub(r'[^\x20-\x7E]+', '', value)
+                    clean_value = re.sub(r"[^\x20-\x7E]+", "", value)
                     cookies_dict[name] = clean_value
     except Exception as e:
         print(f"Ошибка при загрузке куки из {file_path}: {e}")
@@ -138,16 +144,25 @@ def load_cookies(file_path):
 
 
 def initialize_session(cookies_dict):
+    user_agent = UserAgent().random
+
+    while any(
+        mobile in user_agent.lower() for mobile in ["iphone", "mobile", "android"]
+    ):
+        user_agent = UserAgent().random
+
     session = requests.Session()
     for name, value in cookies_dict.items():
         session.cookies.set(name, value)
-    session.headers.update({
-        "Content-Language": "de-DE",
-        "Referer": "https://www.kleinanzeigen.de/",
-        "Content-Type": "*/*",
-        "Accept": "*/*",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    })
+    session.headers.update(
+        {
+            "Content-Language": "de-DE",
+            "Referer": "https://www.kleinanzeigen.de/",
+            "Content-Type": "*/*",
+            "Accept": "*/*",
+            "User-Agent": user_agent,
+        }
+    )
     return session
 
 
@@ -169,20 +184,20 @@ def session_get_with_proxies(session, url, proxies, start_index=0, max_retries=3
                     if soup.find("div", id="error") is None:
                         return response
                     else:
-                        print(f'Невалидный прокси (IP banned). Прокси: {proxy}')
+                        print(f"Невалидный прокси (IP banned). Прокси: {proxy}")
                         break
                 elif response.status_code == 403:
                     soup = BeautifulSoup(response.text, "html.parser")
                     if soup.find("div", id="error") is None:
                         error_403_count += 1
                         if error_403_count >= 5:
-                            print(f'Ошибка 403 - \033[31mкапча\033[0m')
+                            print("Ошибка 403 - \033[31mкапча\033[0m")
                             return "403 Error"
                         elif error_403_count % 2 == 0:
                             # print(f"Ошибка 403. Меняю прокси. Прокси: {proxy}")
                             proxy_index = (proxy_index + 1) % len(proxies)
                     else:
-                        print(f'Невалидный прокси (IP banned). Прокси: {proxy}')
+                        print(f"Невалидный прокси (IP banned). Прокси: {proxy}")
                         break
                 elif response.status_code == 500:
                     soup = BeautifulSoup(response.text, "html.parser")
@@ -197,7 +212,7 @@ def session_get_with_proxies(session, url, proxies, start_index=0, max_retries=3
                         retries += 1
                         time.sleep(1)
                     else:
-                        print(f'Невалидный прокси (IP banned). Прокси: {proxy}')
+                        print(f"Невалидный прокси (IP banned). Прокси: {proxy}")
                         break
                 else:
                     retries += 1
@@ -206,7 +221,9 @@ def session_get_with_proxies(session, url, proxies, start_index=0, max_retries=3
                 retries += 1
                 time.sleep(1)
 
-        proxy_index = (proxy_index + 10) % len(proxies)  # proxy_index + 3, где 3 - количество воркеров (потоков)
+        proxy_index = (proxy_index + 10) % len(
+            proxies
+        )  # proxy_index + 3, где 3 - количество воркеров (потоков)
 
 
 def save_cookies(file_path, original_cookie_file_path):
@@ -220,26 +237,40 @@ def save_cookies(file_path, original_cookie_file_path):
 output_lock = threading.Lock()
 
 
-def get_profile_page(session, url, proxies, start_index, seen_emails, original_cookie_file_path, max_retries=1):
+def get_profile_page(
+    session,
+    url,
+    proxies,
+    start_index,
+    seen_emails,
+    original_cookie_file_path,
+    max_retries=1,
+):
     while True:
         retries = 0
         while retries < max_retries:
             try:
-                response = session_get_with_proxies(session, url, proxies, start_index, max_retries)
+                response = session_get_with_proxies(
+                    session, url, proxies, start_index, max_retries
+                )
 
                 if response == "Invalid Cookie":
                     return "Invalid"
                 elif response == "500 Error":
                     os.makedirs("error500cookie", exist_ok=True)
-                    error_cookie_path = os.path.join("error500cookie", os.path.basename(original_cookie_file_path))
+                    error_cookie_path = os.path.join(
+                        "error500cookie", os.path.basename(original_cookie_file_path)
+                    )
                     save_cookies(error_cookie_path, original_cookie_file_path)
-                    print(f"Файл куки сохранен в error500cookie.")
+                    print("Файл куки сохранен в error500cookie.")
                     return "500 Error"
                 elif response == "403 Error":
                     os.makedirs("error403cookie", exist_ok=True)
-                    error_cookie_path = os.path.join("error403cookie", os.path.basename(original_cookie_file_path))
+                    error_cookie_path = os.path.join(
+                        "error403cookie", os.path.basename(original_cookie_file_path)
+                    )
                     save_cookies(error_cookie_path, original_cookie_file_path)
-                    print(f"Файл куки сохранен в error403cookie.")
+                    print("Файл куки сохранен в error403cookie.")
                     return "403 Error"
 
                 if response and response.status_code == 200:
@@ -248,27 +279,36 @@ def get_profile_page(session, url, proxies, start_index, seen_emails, original_c
 
                     if user_email:
                         email_text = user_email.get_text(strip=True)
-                        email_match = re.search(r'\S+@\S+', email_text)
+                        email_match = re.search(r"\S+@\S+", email_text)
 
                         if email_match:
                             email_result = email_match.group()
 
                             if email_result not in seen_emails:
                                 with output_lock:
-                                    print(f'{email_result} - {Fore.GREEN}valid{Style.RESET_ALL}')
-                                save_cookies(f"valid_cookies/{email_result}.txt", original_cookie_file_path)
+                                    print(
+                                        f"{email_result} - {Fore.GREEN}valid{Style.RESET_ALL}"
+                                    )
+                                save_cookies(
+                                    f"valid_cookies/{email_result}.txt",
+                                    original_cookie_file_path,
+                                )
                                 return email_result
                             else:
                                 with output_lock:
-                                    print(f'{email_result} уже был проверен и является дубликатом.')
+                                    print(
+                                        f"{email_result} уже был проверен и является дубликатом."
+                                    )
                                 return "Duplicate"
                         else:
                             with output_lock:
-                                print(f'Здесь {Fore.RED}нет{Style.RESET_ALL} email, но есть "{email_text}"')
+                                print(
+                                    f'Здесь {Fore.RED}нет{Style.RESET_ALL} email, но есть "{email_text}"'
+                                )
                             return "Invalid"
                     else:
                         with output_lock:
-                            print(f'Cookie {Fore.RED}невалидный{Style.RESET_ALL}')
+                            print(f"Cookie {Fore.RED}невалидный{Style.RESET_ALL}")
                         return "Invalid"
                 else:
                     retries += 1
@@ -276,17 +316,26 @@ def get_profile_page(session, url, proxies, start_index, seen_emails, original_c
                 retries += 1
 
 
-def process_cookie_file(cookie_data, proxies, seen_emails, start_index, base_file_lock, base_file):
+def process_cookie_file(
+    cookie_data, proxies, seen_emails, start_index, base_file_lock, base_file
+):
     cookies_dict, cookie_file_path = cookie_data
 
     session = initialize_session(cookies_dict)
 
-    result = get_profile_page(session, PROFILE_URL, proxies, start_index, seen_emails, cookie_file_path)
+    result = get_profile_page(
+        session, PROFILE_URL, proxies, start_index, seen_emails, cookie_file_path
+    )
 
-    if isinstance(result, str) and result not in ["Invalid", "Duplicate", "500 Error", "403 Error"]:
+    if isinstance(result, str) and result not in [
+        "Invalid",
+        "Duplicate",
+        "500 Error",
+        "403 Error",
+    ]:
         with base_file_lock:
             if result not in seen_emails:
-                base_file.write(result + '\n')
+                base_file.write(result + "\n")
                 base_file.flush()
                 seen_emails.add(result)
 
@@ -313,17 +362,32 @@ def main():
             seen_emails.update(line.strip() for line in base_file)
 
     # если меняешь количество потоков (max_workers=3), дополнительно измени выше "proxy_index = (proxy_index + 3) % len(proxies)"
-    with open("base.txt", "a") as base_file, ThreadPoolExecutor(max_workers=10) as executor:
+    with (
+        open("base.txt", "a") as base_file,
+        ThreadPoolExecutor(max_workers=10) as executor,
+    ):
         base_file_lock = threading.Lock()
         future_to_cookie = {
-            executor.submit(process_cookie_file, cookie_data, proxies, seen_emails, i, base_file_lock,
-                            base_file): cookie_data
+            executor.submit(
+                process_cookie_file,
+                cookie_data,
+                proxies,
+                seen_emails,
+                i,
+                base_file_lock,
+                base_file,
+            ): cookie_data
             for i, cookie_data in enumerate(all_cookies)
         }
 
         for future in as_completed(future_to_cookie):
             result = future.result()
-            if isinstance(result, str) and result not in ["Invalid", "Duplicate", "500 Error", "403 Error"]:
+            if isinstance(result, str) and result not in [
+                "Invalid",
+                "Duplicate",
+                "500 Error",
+                "403 Error",
+            ]:
                 valid_emails.append(result)
 
     print("\nКоличество валида:", len(valid_emails))
